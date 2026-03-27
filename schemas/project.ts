@@ -19,10 +19,17 @@ export default {
             description: "Caption that appears on the tile on the home page (spaces become line breaks)"
         },
         {
-            name: "photo",
-            title: "Photo",
+            name: "gridImage",
+            title: "Grid image",
             type: "image",
-            validation: (Rule: any) => Rule.required(),
+            description: "Image displayed on the project tile in the grid",
+            validation: (Rule: unknown) => Rule.required(),
+        },
+        {
+            name: "detailImage",
+            title: "Detail image",
+            type: "image",
+            description: "Image displayed on the project detail page",
         },
         {
             name: "description",

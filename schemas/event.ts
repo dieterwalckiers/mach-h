@@ -52,6 +52,13 @@ export default {
             description: "will be cropped to a square thumbnail on the events page"
         },
         {
+            name: "photos",
+            title: "Photos",
+            type: "array",
+            of: [{ type: "image", options: { hotspot: true } }],
+            description: "Additional photos displayed on the event detail page",
+        },
+        {
             name: "callToActions",
             title: "Call-to-action's",
             type: "array",
