@@ -9,6 +9,10 @@ This is a monorepo containing two main applications:
 - **MachH/**: Main Qwik-based frontend application (community website)
 - **MachH-admin/**: Sanity CMS studio for content management
 
+Each app is an independent npm project with its own `package.json` and `package-lock.json` — there are no workspace/hoisting links between them. Install and build them separately.
+
+The repo was created by merging two previously separate GitHub repositories with full history preserved via `git subtree`. See [README.md](./README.md) for notes on querying pre-merge history.
+
 ## Development Commands
 
 ### Frontend (MachH/)

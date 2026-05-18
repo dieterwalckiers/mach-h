@@ -13,5 +13,20 @@ Each app keeps its own `package.json` and is installed/built independently. See 
 
 This repo was created by merging two previously separate GitHub repositories. Their full commit histories are preserved via `git subtree` merges:
 
-- `MachH/` history came from `dieterwalckiers/MachH`
-- `MachH-admin/` history came from `dieterwalckiers/MachH-admin`
+- `MachH/` history came from `dieterwalckiers/MachH` (subtree merge `738aa23`)
+- `MachH-admin/` history came from `dieterwalckiers/MachH-admin` (subtree merge `bd299bf`)
+
+### Viewing pre-merge history
+
+Because the imported commits had files at their original (unprefixed) paths, plain `git log -- MachH/path/to/file` won't follow history through the subtree merge. To see the full history of an imported file, follow the merge's second parent:
+
+```bash
+# Full history of a frontend file (commits prior to the monorepo merge are reached via the second parent of 738aa23)
+git log 738aa23^2 -- path/to/file        # path is RELATIVE to MachH/, no prefix
+git log 738aa23 --follow -- MachH/path/to/file  # follows through the merge
+
+# Same for the studio
+git log bd299bf^2 -- path/to/file        # path is RELATIVE to MachH-admin/
+```
+
+`git blame MachH/path/to/file` works normally — blame follows content, not paths.
