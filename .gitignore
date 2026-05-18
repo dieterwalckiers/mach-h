@@ -1,0 +1,14 @@
+# OS
+.DS_Store
+*.swp
+*.swo
+
+# Editors
+.vscode/
+.idea/
+
+# Local Claude / tooling state
+.claude/
+
+# Sanity dataset dumps
+*.ndjson.gz

@@ -1,0 +1,290 @@
+================================================================================
+MOLLIE PAYMENT INTEGRATION - EXECUTIVE SUMMARY
+================================================================================
+
+PROJECT: MachH Event Management System
+PAYMENT PROVIDER: Mollie
+CURRENCY: EUR (Euro)
+FRAMEWORK: Qwik with TypeScript
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+1. COMPLETE INTEGRATION EXISTS
+   - Full payment flow from subscription to confirmation
+   - Database schema with payment tracking
+   - Webhook handler for payment updates
+   - Email confirmation system
+
+2. PAYMENT STATUS LIFECYCLE
+   pending_payment (awaiting payment)
+         ↓
+   confirmed (payment received) OR failed (payment rejected)
+
+3. THREE ENTRY POINTS
+   A) Paid Events: User pays via Mollie → webhook → status confirmed
+   B) Free Events: No payment, status immediately confirmed
+   C) Status Page: Client polls every 5 seconds for updates
+
+================================================================================
+CORE COMPONENTS
+================================================================================
+
+1. SUBSCRIPTION FORM (SubscriptionForm.tsx)
+   - Collects: first name, last name, email
+   - Security: Math CAPTCHA validation
+   - Submission: Posts to useSubscribe() action
+
+2. PAYMENT CREATION (event/[slug]/index.tsx + api/mollie/create-payment)
+   - Decision: Check if event is paid (subscriptionIsPaid && subscriptionPrice > 0)
+   - If free: Set status="confirmed", send email immediately
+   - If paid: Create Mollie payment, set status="pending_payment"
+
+3. MOLLIE API INTEGRATION
+   - Endpoint: https://api.mollie.com/v2/payments
+   - Authentication: Bearer token (MOLLIE_API_KEY)
+   - Returns: payment ID (tr_...), checkout URL
+
+4. WEBHOOK HANDLER (routes/webhook/mollie/index.tsx)
+   - Receives: Mollie payment status updates
+   - Processes: Updates database, sends emails
+   - Idempotent: Prevents duplicate processing
+
+5. STATUS PAGE (routes/payment/status/index.tsx)
+   - Displays: Payment status with live updates
+   - Polling: Every 5 seconds, max 2 minutes
+   - Shows: Loading, success, or failure states
+
+================================================================================
+DATABASE SCHEMA
+================================================================================
+
+Table: attendees
+Columns:
+  - payment_status: 'pending_payment' | 'confirmed' | 'failed'
+  - payment_id: Mollie payment ID (e.g., "tr_...")
+  - paid_at: Timestamp when payment confirmed
+
+Index: idx_attendees_payment_id (for webhook lookups)
+
+All values constrained by payment_status_check constraint.
+
+================================================================================
+PAYMENT FLOW
+================================================================================
+
+SCENARIO 1: PAID EVENT SUBSCRIPTION
+1. User fills form → submits
+2. Attendee created with payment_status="pending_payment"
+3. Mollie payment created → user redirected to checkout
+4. User completes payment
+5. Mollie sends webhook to /webhook/mollie
+6. Webhook fetches payment details from Mollie
+7. Webhook updates attendee: payment_status="confirmed", paid_at=now()
+8. Confirmation email sent via Resend
+9. User redirected to status page → sees success message
+10. Client polls detect change → displays confirmation
+
+SCENARIO 2: FREE EVENT SUBSCRIPTION
+1. User fills form → submits
+2. Attendee created with payment_status="confirmed"
+3. Confirmation email sent immediately
+4. Success message displayed
+
+SCENARIO 3: PAYMENT FAILS/CANCELED
+1. User cancels at Mollie
+2. Mollie sends webhook with status="failed|canceled|expired"
+3. Webhook updates attendee: payment_status="failed"
+4. No email sent
+5. User sees error message
+
+================================================================================
+FILE LOCATIONS
+================================================================================
+
+ABSOLUTE PATHS:
+
+Main Integration Files:
+/home/dyte/source/machh/MachH/src/routes/event/[slug]/index.tsx
+/home/dyte/source/machh/MachH/src/routes/api/mollie/create-payment/index.ts
+/home/dyte/source/machh/MachH/src/routes/api/mollie/get-payment/index.ts
+/home/dyte/source/machh/MachH/src/routes/webhook/mollie/index.tsx
+/home/dyte/source/machh/MachH/src/routes/payment/status/index.tsx
+/home/dyte/source/machh/MachH/src/services/mollie.ts
+/home/dyte/source/machh/MachH/src/util/mail.ts
+
+Database:
+/home/dyte/source/machh/MachH/supabase/migrations/20250623202016_add_payment_columns.sql
+
+Types:
+/home/dyte/source/machh/MachH/src/contract.ts
+
+Configuration:
+/home/dyte/source/machh/MachH/.env.local.example
+
+================================================================================
+ENVIRONMENT VARIABLES REQUIRED
+================================================================================
+
+MOLLIE_API_KEY=your_mollie_api_key
+PUBLIC_APP_URL=https://your-domain.com
+MOLLIE_WEBHOOK_URL=https://your-domain.com/webhook/mollie (optional)
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_key
+RESEND_API_KEY=your_resend_key
+
+================================================================================
+API ENDPOINTS
+================================================================================
+
+User-Facing:
+GET /payment/status?attendeeId={id}     - Payment status page
+GET /payment/status?p={paymentId}        - Payment status page (alt)
+
+Internal:
+POST /api/mollie/create-payment          - Create Mollie payment
+POST /api/mollie/get-payment             - Get payment status
+POST /webhook/mollie                     - Receive Mollie callbacks
+
+External (Mollie → App):
+POST /webhook/mollie (from Mollie)       - Payment status callbacks
+
+================================================================================
+ERROR HANDLING
+================================================================================
+
+Payment Creation:
+- Missing API key → 500 "Server configuration error"
+- Invalid request → 400 "Missing required fields"
+- Mollie error → 500 "Payment creation failed"
+
+Webhook Processing:
+- Invalid payment ID → 400 "Invalid payment ID"
+- Attendee not found → 404 "Attendee not found"
+- Database error → 500 "Failed to update payment status"
+- Already processed → 200 "Already processed" (idempotent)
+
+Status Page:
+- No payment ID → Error display
+- Polling timeout → Stops after 2 minutes
+
+================================================================================
+SECURITY CONSIDERATIONS
+================================================================================
+
+CURRENT:
+- CSRF skipped for webhooks (necessary for external calls)
+- Basic payment ID validation (starts with "tr_")
+- Idempotency check to prevent duplicate processing
+
+RECOMMENDATIONS:
+- Implement Mollie webhook signature verification
+- Add rate limiting on payment endpoints
+- Log all payment transactions
+- Monitor webhook delivery failures
+- Use environment variables for all secrets
+
+================================================================================
+TESTING CHECKLIST
+================================================================================
+
+Free Event:
+[ ] Subscribe to free event
+[ ] Verify payment_status="confirmed" immediately
+[ ] Check confirmation email sent
+[ ] Verify success message displayed
+
+Paid Event Success:
+[ ] Subscribe to paid event
+[ ] Verify payment_status="pending_payment"
+[ ] Verify redirected to Mollie checkout
+[ ] Complete test payment
+[ ] Verify webhook received
+[ ] Check payment_status="confirmed" in DB
+[ ] Check paid_at timestamp set
+[ ] Verify confirmation email sent
+[ ] Verify status page shows success
+
+Paid Event Failure:
+[ ] Subscribe to paid event
+[ ] Cancel at Mollie checkout
+[ ] Verify webhook received
+[ ] Check payment_status="failed" in DB
+[ ] Verify no email sent
+[ ] Verify status page shows error
+
+================================================================================
+MONITORING & DEBUGGING
+================================================================================
+
+Enable Logging:
+- All key files have console.error() statements
+- Check browser console for client-side errors
+- Check server logs for webhook processing
+
+Mollie Dashboard:
+- View payment details
+- Resend failed webhooks
+- Test webhook delivery
+- Monitor payment statuses
+
+Database Checks:
+SELECT * FROM attendees WHERE payment_status='pending_payment'
+SELECT * FROM attendees WHERE paid_at IS NOT NULL
+SELECT * FROM attendees WHERE payment_status='failed'
+
+================================================================================
+DOCUMENTATION FILES
+================================================================================
+
+Created in /home/dyte/source/machh/:
+
+1. MOLLIE_PAYMENT_INTEGRATION.md
+   - Comprehensive technical documentation
+   - Complete code explanations
+   - API integration details
+
+2. PAYMENT_STATUS_QUICK_REFERENCE.md
+   - Quick lookup guide
+   - Status transitions
+   - Common issues and solutions
+
+3. PAYMENT_FILES_INDEX.md
+   - Complete file index
+   - Line-by-line references
+   - Step-by-step code flow
+
+4. PAYMENT_INTEGRATION_SUMMARY.txt
+   - This file
+   - Executive overview
+   - Quick facts
+
+================================================================================
+KEY STATS
+================================================================================
+
+Files Modified: 8 core files
+Database Tables: 1 (attendees)
+New Columns: 3 (payment_status, payment_id, paid_at)
+API Endpoints: 3 new routes
+Service Functions: 3 (create, get, verify)
+Status States: 3 (pending_payment, confirmed, failed)
+Email Templates: Defined in Sanity CMS
+Polling Interval: 5 seconds
+Max Polling Time: 2 minutes (24 polls)
+
+================================================================================
+CONTACT & SUPPORT
+================================================================================
+
+For questions about:
+- Payment flow: See MOLLIE_PAYMENT_INTEGRATION.md
+- Status updates: See PAYMENT_STATUS_QUICK_REFERENCE.md
+- Code references: See PAYMENT_FILES_INDEX.md
+- API integration: See api/mollie/* files
+- Database: See supabase/migrations/
+
+================================================================================
+END OF SUMMARY
+================================================================================

@@ -1,0 +1,486 @@
+================================================================================
+MOLLIE PAYMENT INTEGRATION - FLOW DIAGRAMS
+================================================================================
+
+================================================================================
+1. OVERALL PAYMENT STATUS LIFECYCLE
+================================================================================
+
+                          User Subscribes
+                                 |
+                                 v
+                    +---->  [Paid Event?]  <----+
+                    |            |               |
+                    |      [Yes]  |  [No]        |
+                    |            v               |
+                    |     Create Mollie     Set status =
+                    |     Payment          "confirmed"
+                    |            |               |
+              +-----+-----+      |      +--------+
+              |           |      |      |
+              v           v      v      v
+     [payment_status:  [payment_status:  Send
+      pending_payment] confirmed]       Email
+              |           |              |
+              v           v              v
+         Redirect to   Immediate      Success
+         Mollie        Confirmation   Message
+         Checkout      Message
+
+================================================================================
+2. PAID EVENT COMPLETE FLOW (Happy Path)
+================================================================================
+
+1. SUBSCRIPTION FORM
+   ┌─────────────────────────────────┐
+   │ User fills form:                │
+   │ - First name                    │
+   │ - Last name                     │
+   │ - Email                         │
+   │ - Math CAPTCHA                  │
+   └──────────────┬──────────────────┘
+                  │
+                  v
+2. FORM SUBMISSION
+   ┌─────────────────────────────────┐
+   │ POST Form Data                  │
+   │ → useSubscribe() action         │
+   └──────────────┬──────────────────┘
+                  │
+                  v
+3. CREATE ATTENDEE
+   ┌─────────────────────────────────┐
+   │ INSERT INTO attendees:          │
+   │ - first_name, last_name, email  │
+   │ - event_slug                    │
+   │ - payment_status="pending_paym" │
+   │ - payment_id=NULL (initially)   │
+   └──────────────┬──────────────────┘
+                  │
+                  v
+4. CREATE MOLLIE PAYMENT
+   ┌─────────────────────────────────┐
+   │ POST /api/mollie/create-payment │
+   │ → Call Mollie API v2/payments   │
+   │ Returns:                        │
+   │ - id: tr_XXXXX                  │
+   │ - status: "open"                │
+   │ - checkout_url: https://...     │
+   └──────────────┬──────────────────┘
+                  │
+                  v
+5. UPDATE ATTENDEE WITH PAYMENT ID
+   ┌─────────────────────────────────┐
+   │ UPDATE attendees SET:           │
+   │ - payment_id="tr_XXXXX"         │
+   │ WHERE id={attendeeId}           │
+   └──────────────┬──────────────────┘
+                  │
+                  v
+6. REDIRECT TO MOLLIE
+   ┌─────────────────────────────────┐
+   │ window.location.href =          │
+   │ payment.checkout_url            │
+   │ (Mollie hosted checkout)        │
+   └──────────────┬──────────────────┘
+                  │
+                  v
+7. USER COMPLETES PAYMENT
+   ┌─────────────────────────────────┐
+   │ User enters payment details     │
+   │ (Card, iDEAL, etc.)            │
+   │ Payment is processed by Mollie  │
+   └──────────────┬──────────────────┘
+                  │
+                  v
+8. MOLLIE SENDS WEBHOOK
+   ┌─────────────────────────────────┐
+   │ POST /webhook/mollie            │
+   │ body: { id: "tr_XXXXX" }        │
+   │ (From Mollie servers)           │
+   └──────────────┬──────────────────┘
+                  │
+                  v
+9. WEBHOOK VERIFICATION
+   ┌─────────────────────────────────┐
+   │ Verify paymentId starts "tr_"   │
+   │ Fetch payment details from API  │
+   │ Fetch attendee from DB          │
+   │ Check if already processed      │
+   └──────────────┬──────────────────┘
+                  │
+                  v
+10. CHECK PAYMENT STATUS
+   ┌──────────────────────────────────┐
+   │ if (payment.status === "paid")   │
+   │  → Update to "confirmed"         │
+   │ else if (status failure)         │
+   │  → Update to "failed"            │
+   └──────────────┬───────────────────┘
+                  │
+                  v
+11. UPDATE DATABASE
+   ┌──────────────────────────────────┐
+   │ UPDATE attendees SET:            │
+   │ - payment_status="confirmed"     │
+   │ - paid_at=NOW()                  │
+   │ WHERE id={attendeeId}            │
+   └──────────────┬───────────────────┘
+                  │
+                  v
+12. SEND CONFIRMATION EMAILS
+   ┌──────────────────────────────────┐
+   │ sendConfirmationEmails():        │
+   │ 1. Internal notification         │
+   │    → inschrijvingen@mach-h.be    │
+   │ 2. Subscriber confirmation       │
+   │    → user's email                │
+   │ (Via Resend API)                 │
+   └──────────────┬───────────────────┘
+                  │
+                  v
+13. USER SEES STATUS PAGE
+   ┌──────────────────────────────────┐
+   │ Browser navigates to:            │
+   │ /payment/status?attendeeId={id}  │
+   │                                  │
+   │ Initially: payment.status="paid" │
+   │ DB status: "confirmed"           │
+   │ Display: Green checkmark + msg   │
+   │ "Bedankt voor je inschrijving!"  │
+   └──────────────────────────────────┘
+
+================================================================================
+3. WEBHOOK HANDLER DECISION TREE
+================================================================================
+
+                    Webhook Received
+                    POST /webhook/mollie
+                           |
+                           v
+                  ┌─────────────────────┐
+                  │ Extract Payment ID   │
+                  │ from body.id         │
+                  └─────────┬───────────┘
+                            |
+                            v
+                  ┌─────────────────────┐
+                  │ Verify ID format    │
+                  │ (starts with "tr_") │
+                  └─────────┬───────────┘
+                            |
+                  ┌─────────┴─────────┐
+                  v                   v
+            [Valid]             [Invalid]
+              |                     |
+              v                     v
+        Fetch from Mollie    Return 400
+              |              "Invalid ID"
+              v
+        ┌──────────────────┐
+        │ Check metadata   │
+        │ Has attendeeId?  │
+        └────────┬─────────┘
+                 |
+         ┌───────┴────────┐
+         v                v
+      [Yes]            [No]
+        |               |
+        v               v
+    Fetch from DB  Return 400
+        |          "Invalid metadata"
+        v
+    ┌─────────────────────┐
+    │ Found in DB?        │
+    └────────┬────────────┘
+             |
+      ┌──────┴──────┐
+      v             v
+    [Yes]         [No]
+      |             |
+      v             v
+   Check         Return 404
+   Idempotency   "Attendee not found"
+      |
+      v
+    ┌─────────────────────┐
+    │ Already processed?  │
+    │ (confirmed + paid)  │
+    └────────┬────────────┘
+             |
+      ┌──────┴──────────────┐
+      v                     v
+    [Yes]               [No - Continue]
+      |                     |
+      v                     v
+  Return 200           Check Payment Status
+  "Already processed"        |
+                             v
+                   ┌─────────────────────┐
+                   │ payment.status ==   │
+                   │ "paid"?             │
+                   └────────┬────────────┘
+                            |
+                ┌───────────┴───────────┐
+                v                       v
+             [Yes]                    [No]
+              |                        |
+              v                        v
+         Set to "confirmed"   Is it failed/canceled/expired?
+         Set paid_at=now()           |
+         Update DB              ┌────┴────┐
+              |                 v         v
+              v               [Yes]    [No]
+          Send Emails      Set to      Return 200
+              |            "failed"    "Webhook processed"
+              v            Update DB        |
+          Return 200            |          v
+          "Webhook processed"    v      DONE
+                             Return 200
+
+================================================================================
+4. CLIENT-SIDE POLLING FLOW (Status Page)
+================================================================================
+
+                    User visits page
+                    /payment/status
+                           |
+                           v
+        ┌──────────────────────────────┐
+        │ usePaymentStatus() executes  │
+        │ on server-side               │
+        │ Fetches:                     │
+        │ - Payment from Mollie        │
+        │ - Attendee from DB           │
+        └──────────┬───────────────────┘
+                   |
+                   v
+        ┌──────────────────────────────┐
+        │ Check payment.status         │
+        └──────────────┬───────────────┘
+                       |
+        ┌──────────────┼──────────────┐
+        v              v              v
+    "pending"      "paid"         Other
+      |              |              |
+      v              v              v
+   Show         Show Green      Show Red
+   Loading      Checkmark       X
+      |         "Bedankt"       "Failed"
+      v         [STOP]              |
+   Start                            v
+   Polling                      [STOP]
+      |
+      v
+   ┌────────────────────────────┐
+   │ Every 5 seconds:           │
+   │ Call checkPaymentStatus()  │
+   │ (server function)          │
+   └────────┬───────────────────┘
+            |
+            v
+   ┌────────────────────────────┐
+   │ Check poll count           │
+   │ < 24 polls?                │
+   └────────┬───────────────────┘
+            |
+    ┌───────┴────────┐
+    v                v
+  [Yes]            [No]
+    |               |
+    v               v
+  Poll          Stop Polling
+    |            (2 min limit)
+    v
+   Fetch Status
+    |
+    v
+  ┌──────────────────────────┐
+  │ Status changed from      │
+  │ "pending"?               │
+  └────────┬─────────────────┘
+           |
+    ┌──────┴──────┐
+    v             v
+  [Yes]         [No]
+    |             |
+    v             v
+  Stop Poll    Continue
+  Update UI   Polling
+    |
+    v
+  Display
+  Result
+
+================================================================================
+5. DATABASE STATUS FLOW
+================================================================================
+
+                        START
+                          |
+                          v
+        ┌────────────────────────────┐
+        │ User subscribes to event   │
+        └────────┬───────────────────┘
+                 |
+                 v
+    ┌────────────────────────────────┐
+    │ Is it a PAID event?            │
+    │ subscriptionIsPaid &&          │
+    │ subscriptionPrice > 0          │
+    └────────┬──────────────┬────────┘
+             |              |
+        [No] |              | [Yes]
+             |              |
+             v              v
+    ┌─────────────────┐   ┌──────────────────────┐
+    │ Insert with     │   │ Insert with          │
+    │ payment_status= │   │ payment_status=      │
+    │ "confirmed"     │   │ "pending_payment"    │
+    │ payment_id=NULL │   │ payment_id=NULL      │
+    └────────┬────────┘   └──────────┬───────────┘
+             |                       |
+             v                       v
+        Send Email         ┌─────────────────────┐
+             |             │ Create Mollie       │
+             |             │ Payment             │
+             |             │ Update payment_id   │
+             |             │ = tr_XXXXX          │
+             |             └──────────┬──────────┘
+             |                        |
+             v                        v
+        ┌──────────────────┐  ┌───────────────┐
+        │ SUCCESS STATE    │  │ Redirect to   │
+        │ payment_status = │  │ Mollie        │
+        │ "confirmed"      │  │ Checkout      │
+        └──────────────────┘  └───────┬───────┘
+                                      |
+                                      v
+                              ┌───────────────┐
+                              │ User Pays     │
+                              └───────┬───────┘
+                                      |
+                                      v
+                              ┌────────────────────┐
+                              │ Mollie Webhook     │
+                              │ Received           │
+                              └─────────┬──────────┘
+                                        |
+                              ┌─────────┴──────────┐
+                              v                    v
+                          ┌─────────────┐   ┌──────────────┐
+                          │ payment.    │   │ payment.     │
+                          │ status =    │   │ status =     │
+                          │ "paid"      │   │ failed/cancel│
+                          └────┬────────┘   └──────┬───────┘
+                               |                   |
+                               v                   v
+                        ┌──────────────────┐  ┌─────────────┐
+                        │ Update status =  │  │ Update      │
+                        │ "confirmed"      │  │ status =    │
+                        │ Set paid_at=now()│  │ "failed"    │
+                        │ Send Email       │  │ No Email    │
+                        └──────────────────┘  └─────────────┘
+                               |                   |
+                               v                   v
+                        ┌──────────────────┐  ┌─────────────┐
+                        │ CONFIRMED STATE  │  │ FAILED STATE│
+                        │ payment_status = │  │ payment_    │
+                        │ "confirmed"      │  │ status =    │
+                        │ paid_at = <time> │  │ "failed"    │
+                        └──────────────────┘  └─────────────┘
+
+================================================================================
+6. API CALL SEQUENCE
+================================================================================
+
+┌────────────┐              ┌──────────────────┐
+│   Client   │              │  Your Backend    │
+│  Browser   │              │     (Qwik)       │
+└─────┬──────┘              └────────┬─────────┘
+      │                              │
+      │ 1. Fill form & submit        │
+      ├─────────────────────────────>│
+      │    (useSubscribe action)     │
+      │                              │
+      │                              │ 2. Check if paid event
+      │                              │    (Sanity fetch)
+      │                              │
+      │                              │ 3. INSERT into attendees
+      │                              │    (Supabase)
+      │                              │
+      │                              ├─────────────────┐
+      │                              │                 │
+      │                              │ 4. POST /api/mollie/
+      │                              │    create-payment
+      │                              │
+      │                    ┌─────────────────┐
+      │                    │  Mollie API     │
+      │                    │ /v2/payments    │
+      │                    └────────┬────────┘
+      │                             │
+      │                    5. Returns:
+      │                    - id: tr_XXXXX
+      │                    - checkout_url
+      │                             │
+      │                    6. UPDATE payment_id
+      │                    (Supabase)
+      │                              │
+      │ 7. Redirect URL<────────────┤
+      │    with checkout_url         │
+      │                              │
+      │ 8. Browser navigates to      │
+      │    Mollie checkout           │
+      │                              │
+      ├────────────────────────────>│ Mollie.com
+      │ (User completes payment)    │
+      │                              │
+      │ 9. Mollie webhook            │
+      │    POST /webhook/mollie
+      │    (payment id in body)
+      │
+      │    ┌────────────────────────┐
+      │    │ Your Backend Webhook   │
+      │    │ Handler                │
+      │    └────────┬───────────────┘
+      │             │
+      │             │ 10. GET payment status
+      │             │     from Mollie API
+      │             │     /v2/payments/tr_XXXXX
+      │             │
+      │             ├──────────────────────┐
+      │             │ 11. SELECT attendee  │
+      │             │     from Supabase    │
+      │             │                      │
+      │             │ 12. UPDATE attendee  │
+      │             │     payment_status=  │
+      │             │     "confirmed"      │
+      │             │                      │
+      │             │ 13. Send email via   │
+      │             │     Resend API       │
+      │             │                      │
+      │ 14. Browser navigates to    │
+      │     /payment/status         │<─────┤
+      ├─────────────────────────────│
+      │ (GET with attendeeId)       │
+      │                              │
+      │ 15. Fetch from DB           │
+      │     & Mollie API            │
+      │     (usePaymentStatus       │
+      │      loader)                │
+      │                              │
+      │ 16. Render status page<─────┤
+      │     with polling            │
+      │                              │
+      │ 17. Poll every 5 sec        │
+      │     (checkPaymentStatus)    │
+      ├─────────────────────────────>│
+      │                              │
+      │ 18. Status changes          │
+      │     Stop polling, show      │
+      │     success message         │
+      │                              │
+
+================================================================================
+END OF DIAGRAMS
+================================================================================
