@@ -1,0 +1,25 @@
+# robots.txt for mach-h.be
+User-agent: *
+Allow: /
+
+# Discourage excessive crawling of calendar with query parameters
+# Crawlers should not iterate through all possible year/month combinations
+User-agent: *
+Disallow: /calendar-overview?
+Crawl-delay: 10
+
+# Block common aggressive bots
+User-agent: AhrefsBot
+Disallow: /
+
+User-agent: SemrushBot
+Disallow: /
+
+User-agent: DotBot
+Disallow: /
+
+User-agent: MJ12bot
+Disallow: /
+
+# Sitemap location
+Sitemap: https://www.mach-h.be/sitemap.xml
