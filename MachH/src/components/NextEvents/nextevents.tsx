@@ -33,7 +33,7 @@ const NextEvents = component$<Props>(({ events }) => {
     return (
         <section class="nextevents w-full text-machh-primary border-b-[3px] border-machh-primary pt-6 font-semibold uppercase">
             <MachHTitle class="mb-6">
-                Komende activiteiten
+                Komende activiteiten:
             </MachHTitle>
             <div class="flex justify-between relative overflow-x-auto py-8">
                 {
